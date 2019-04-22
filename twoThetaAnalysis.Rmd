@@ -64,11 +64,16 @@ parTransFuns <- list(
 
 fitTwoThetasTrans <- function( tree, shiftSpecies, colSpecies, gene.data.row, 
                                initParams, lowerBound, upperBound,
-                               trans = c("none","log","rho")){
+                               trans = c("none","log","rho"),
+                               shiftOnStartOfBranch = F){
   
   transFun <- parTransFuns[[match.arg(trans)]]
 
   isThetaShiftEdge <- 1:Nedge(tree) %in% getEdgesFromMRCA(tree, tips = shiftSpecies)
+  
+  if( shiftOnStartOfBranch ) {
+    isThetaShiftEdge[match(getMRCA(tree,shiftSpecies), tree$edge[ ,2])] <- TRUE
+  }
   
   # match the column species with the phylogeny tip labels
   index.expand <- match(colSpecies, tree$tip.label)
@@ -205,7 +210,7 @@ for( gene in rownames(gene.data)){
 
 ```
 
-## Alpha and Ssal expression
+### Alpha and Ssal expression
 
 Beacause of the phylogeny where Ssal has a significantly shorter branch than the other species and the decision to define the theta shift at the most recent common ancestor of the salmonids
 
@@ -229,7 +234,7 @@ tibble(
 girafe(code = print(g))
 ```
 
-## Between-/Within-species variance
+### Between-/Within-species variance
 ```{r betweenSpeciesVarPlot}
 
 # calculate expected mean based on parameters
@@ -279,4 +284,144 @@ tibble(
 girafe(code = print(g))  
 ```
 
+## Late vs early theta-shift
+
+In the model used above the theta-shift was placed at the point of the first diverging species in the salmonid clade. However, the WGD event, which is were we expect the shift, occurred earlier at some point along the branch leading to the salmonids. As we have seen above, the relatively short Ssal branch leads to overfitting to the Ssal expression. By moving the theta-shift to the start of the salmonid branch there is less difference in the time since shift and there should be less overfitting.
+
+```{r plotTreeWithShiftColors}
+orangeEdges <- 1:Nedge(tree) %in% getEdgesFromMRCA(tree, tips = shiftSpecies)
+
+plot.phylo(tree, edge.color = ifelse(orangeEdges,"orange","black"),
+           tip.color = ifelse(tree$tip.label %in% shiftSpecies,"orange","black"),
+           main = "Shift at root of clade")
+  
+orangeEdges[match(getMRCA(tree,shiftSpecies), tree$edge[ ,2])] <- TRUE
+
+plot.phylo(tree, edge.color = ifelse(orangeEdges,"orange","black"),
+           tip.color = ifelse(tree$tip.label %in% shiftSpecies,"orange","black"),
+           main = "Shift at start of branch to clade")
+```
+
+```{r fitEarlyShift, cache=TRUE}
+lapply(rownames(gene.data), function(geneID){
+    fitTwoThetasTrans(tree = tree, shiftSpecies = shiftSpecies, 
+                      colSpecies =colnames(gene.data), 
+                      gene.data.row = gene.data[geneID, ], 
+                      initParams = initParams[geneID, ], 
+                      trans = "log",
+                      lowerBound = lowerBound, upperBound = upperBound,
+                      shiftOnStartOfBranch = TRUE)
+}) -> resEarlyShift
+
+
+resTblEarly <- 
+  t(sapply(resEarlyShift, function(res) res$par)) %>% 
+  as.tibble() %>% 
+  mutate( geneID=rownames(gene.data),
+          ll = sapply(resEarlyShift, function(res) -res$value),
+          convergence = map_int(resEarlyShift, "convergence"),
+          iterations = sapply(resEarlyShift, function(res) res$counts[1]))
+
+```
+
+### Compare estimated parameters
+
+```{r plotCompareParamsEarlyLate}
+
+bind_rows(.id = "shiftPoint", 
+          early = resTblEarly,
+          late = filter(resTbl, trans =="log")) %>% 
+  select(-theta1,-theta2, -iterations, -trans, -convergence) %>% 
+  group_by(geneID) %>% 
+  mutate( llDiff = ll - mean(ll)) %>% 
+  ungroup() %>% 
+  select(-ll) %>% 
+  gather(key = "Parameter", value = "Value", sigma2, alpha, beta) %>%
+  mutate( geneID = factor(geneID,levels=rev(unique(geneID)))) %>% 
+  ggplot( aes(x=Value,y=geneID, color=llDiff, shape=shiftPoint)) + 
+  geom_point( size=3) + 
+  scale_shape_manual(values = c(3,4)) +
+  scale_color_gradient2(low="blue",mid="black", high="red") +
+  facet_grid(. ~ Parameter ,scales = "free") +
+  theme(legend.position="bottom") +
+  scale_x_log10() +
+  geom_vline(data=tibble(x=upperBound[3:5],Parameter=names(upperBound[3:5])),aes(xintercept=x),
+             color="red",linetype=3)
+
+```
+
+```{r plotCompareLL}
+resTblEarly %>% 
+  transmute(llEarly=ll,geneID=geneID) %>% 
+  left_join(resTbl %>% filter( trans =="log") %>% select(ll,geneID), by="geneID") %>% 
+  mutate( llDiff = llEarly - ll) %>% 
+  mutate( geneID = factor(geneID,levels=rev(unique(geneID)))) %>% 
+  ggplot( aes(y=llDiff, x=geneID, fill=llDiff >0)) + 
+  geom_col() +
+  scale_fill_manual(values = c("blue","red"), guide=F) +
+  coord_flip() + 
+  ylab("logL_early - logL_late")
+```
+
+The likelihoods, with few exceptions, are lower when using the early shift. Is this because the late shift model reflects the true process better or is it because the late shift phylogeny allows more overfitting?
+
+### Expected expression {.tabset}
+
+```{r plotExpEarlyShift,results="asis"}
+# plot the expression on Y and time since shift on the X. + Expected expression trend line.
+
+# get time since shift
+earlyNode <- getMRCA(tree,c(shiftSpecies,"Eluc"))
+spcNodes <- match(shiftSpecies,tree$tip.label)
+timeSinceShift <- setNames(dist.nodes(tree)[earlyNode,spcNodes], shiftSpecies)
+
+for( gene in rownames(gene.data)){
+
+  cat("\n\n####",gene,"\n")
+  
+  with(as.list(resTblEarly %>% filter(geneID==gene)),{
+    trendLine <- 
+      tibble(timeSinceShift = seq(0,max(timeSinceShift),length.out = 100)) %>% 
+      mutate( expLevel = theta2 + (theta1-theta2) * exp(-alpha * timeSinceShift))
+    
+    tibble(expLevel=gene.data[gene,], spc=colnames(gene.data)) %>% 
+      mutate( timeSinceShift = ifelse(spc %in% shiftSpecies,timeSinceShift[spc],0) ) %>% 
+      ggplot( aes( x = timeSinceShift, y = expLevel)) +
+      geom_point() +
+      geom_line( data=trendLine, color="red",linetype=2) +
+      geom_hline(yintercept=theta1, color="blue",linetype=3) +
+      annotate( "text", label="theta1",x=0.02,y=theta1, color="blue", vjust=-0.5) +
+      geom_hline(yintercept=theta2, color="blue",linetype=3) + 
+      annotate( "text", label="theta2",x=0.02,y=theta2, color="blue", vjust=-0.5) +
+      ggtitle(paste0(gene,"  sigma2 = ",signif(sigma2,3),"  alpha = ",signif(alpha,3), "  beta = ", signif(beta,3)))
+  }) -> g
+  print(g)
+  
+}
+
+```
+
+### Alpha vs Ssal relative expression
+
+```{r relSsalEarlyShiftPlot}
+colSpeciesIndices <- split(1:ncol(gene.data), f = colnames(gene.data))
+species.mean <- sapply(colSpeciesIndices, function(i){ rowMeans(gene.data[,i]) })
+
+tibble(
+  geneID = rownames(gene.data),
+  preShift = rowMeans(species.mean[ ,c("Drer", "Eluc", "Olat")]),
+  postShift = rowMeans(species.mean[ ,c("Salp", "Okis", "Omyk")]),
+  Ssal = species.mean[ ,"Ssal"]
+) %>% 
+  mutate( relSsalShift = (Ssal-preShift) / (postShift-preShift)) %>% 
+  left_join( resTblEarly %>% select(geneID,alpha), by="geneID") %>% 
+  ggplot( aes(x=relSsalShift, y=alpha, color=alpha)) +
+  scale_color_gradientn(colours = c("blue","black","red"),trans = "log", breaks = c(10^(-1:3))) +
+  geom_point_interactive( aes(tooltip=geneID, data_id = geneID)) + 
+  scale_y_log10() -> g
+
+girafe(code = print(g))
+```
+
+With the early theta-shift the 
 
