@@ -17,9 +17,7 @@ library(tidyverse)
 library(ape)
 library(ggiraph)
 
-source("scripts/EVEcore.R")
-source("scripts/eve-io.R")
-source("scripts/twoThetaTest.R")
+library(evemodel)
 ```
 
 ```{r loadData}

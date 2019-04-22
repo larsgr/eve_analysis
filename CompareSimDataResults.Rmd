@@ -14,9 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(dev = "svg")
 library(ape)
 
-source('./scripts/eve-io.R')
-source('./scripts/dvdt.R')
-source('./scripts/twoThetaTest.R')
+library(evemodel)
 
 library(tidyverse)
 ```

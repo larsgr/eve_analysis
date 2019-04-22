@@ -13,9 +13,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 library(ape)
 
-source('./scripts/eve-io.R')
-source('./scripts/dvdt.R')
-source("scripts/twoThetaTest.R")
+library(evemodel)
 
 library(tidyverse)
 ```
