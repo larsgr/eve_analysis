@@ -32,6 +32,7 @@ upperBound <- c(theta1 =  99, theta2 =  99, sigma2 =   9999, alpha = 999  , beta
 ```
 
 ```{r defFun}
+paramsToTransform <- c("sigma2","alpha","beta")
 
 parTransFuns <- list(
   none = list(
@@ -40,14 +41,14 @@ parTransFuns <- list(
   ),
   log = list(
     trans = function(par){
-      with(as.list(par),
-           c( theta1 = theta1, theta2 = theta2, 
-              sigma2 = log(sigma2), alpha = log(alpha), beta = log(beta)))
+      i <- names(par) %in% paramsToTransform
+      par[i] <- log(par[i])
+      return(par)
     },
     untrans = function(par){
-      with(as.list(par),
-           c( theta1 = theta1, theta2 = theta2, 
-              sigma2 = exp(sigma2), alpha = exp(alpha), beta = exp(beta)))
+      i <- names(par) %in% paramsToTransform
+      par[i] <- exp(par[i])
+      return(par)
     }),
   rho = list(
     trans = function(par){
@@ -96,6 +97,35 @@ fitTwoThetasTrans <- function( tree, shiftSpecies, colSpecies, gene.data.row,
   #   lowerBound["alpha"] <- upperBound["alpha"]
   #   upperBound["alpha"] <- tmp
   # }
+    
+  res <- optim( par = transFun$trans(initParams), fn = LLPerGeneTwoTheta, method = "L-BFGS-B",
+                lower = transFun$trans(lowerBound), 
+                upper = transFun$trans(upperBound))
+
+  res$par <- transFun$untrans(res$par)
+  
+  return(res)
+}
+
+fitOneThetaTrans <- function( tree, colSpecies, gene.data.row, 
+                              initParams, lowerBound, upperBound,
+                              trans = c("none","log","rho")){
+  
+  transFun <- parTransFuns[[match.arg(trans)]]
+
+  # match the column species with the phylogeny tip labels
+  index.expand <- match(colSpecies, tree$tip.label)
+
+  # function to optimize
+  LLPerGeneTwoTheta <- function(par)
+  {
+    params <- transFun$untrans(par)
+    ll <- logLikOU( theta = params[1], sigma2 = params[2],
+                    alpha = params[4], beta = params[5],
+                    tree = tree, gene.data.row = gene.data.row, 
+                    index.expand = index.expand)
+    return(-ll)
+  }
     
   res <- optim( par = transFun$trans(initParams), fn = LLPerGeneTwoTheta, method = "L-BFGS-B",
                 lower = transFun$trans(lowerBound), 
@@ -423,5 +453,8 @@ tibble(
 girafe(code = print(g))
 ```
 
-With the early theta-shift the 
+
+## single theta
+
+
 
